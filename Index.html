@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ريشة | Vector Drawing</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">ريشة</div>
+    <div class="top-actions">
+      <button id="newBtn" title="مشروع جديد">جديد</button>
+      <button id="undoBtn" title="تراجع">↶</button>
+      <button id="redoBtn" title="إعادة">↷</button>
+      <button id="saveBtn" title="حفظ المشروع">حفظ</button>
+      <button id="openBtn" title="فتح مشروع">فتح</button>
+      <button id="exportPngBtn" title="تصدير PNG">PNG</button>
+      <button id="exportSvgBtn" title="تصدير SVG">SVG</button>
+      <button id="menuBtn" class="icon-btn" title="استيراد">⋮</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="toolbar">
+      <button class="tool active" data-tool="pen" title="قلم">✎<span>قلم</span></button>
+      <button class="tool" data-tool="select" title="تحديد">⌖<span>تحديد</span></button>
+      <button class="tool" data-tool="pan" title="تحريك اللوحة">✋<span>تحريك</span></button>
+      <button class="tool" data-tool="eraser" title="ممحاة">⌫<span>ممحاة</span></button>
+    </aside>
+
+    <section class="canvas-area">
+      <div id="canvasViewport" class="canvas-viewport">
+        <div id="artboardWrap" class="artboard-wrap">
+          <canvas id="artboard" width="1200" height="800"></canvas>
+          <div id="selectionBox" class="selection-box hidden">
+            <div class="handle nw"></div><div class="handle ne"></div>
+            <div class="handle sw"></div><div class="handle se"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-panel">
+        <label>اللون <input id="colorInput" type="color" value="#111111"></label>
+        <label>السمك <input id="sizeInput" type="range" min="1" max="80" value="6"><output id="sizeValue">6</output></label>
+        <label>التكبير <input id="zoomInput" type="range" min="25" max="200" value="100"><output id="zoomValue">100%</output></label>
+        <span id="status">جاهز</span>
+      </div>
+    </section>
+
+    <aside class="layers-panel">
+      <div class="panel-title">الطبقات</div>
+      <div id="layersList" class="layers-list"></div>
+      <div class="layer-actions">
+        <button id="addLayerBtn">+ طبقة</button>
+        <button id="deleteLayerBtn">حذف</button>
+        <button id="duplicateLayerBtn">نسخ</button>
+      </div>
+    </aside>
+  </main>
+
+  <input id="projectInput" type="file" accept=".vpaint,.json,application/json" hidden>
+  <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+
+  <div id="importMenu" class="import-menu hidden">
+    <div class="menu-title">استيراد</div>
+    <button data-import="image">🖼 صورة</button>
+    <button data-import="project">📁 مشروع ريشة</button>
+    <button data-import="svg">◇ رسم SVG</button>
+    <button data-import="brush">🖌 فرشاة</button>
+    <button data-import="lines">〰 خطوط</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
