@@ -1,0 +1,629 @@
+from pathlib import Path
+import textwrap, zipfile, os, json, re
+
+root = Path("/mnt/data/reesha-new")
+root.mkdir(parents=True, exist_ok=True)
+
+index_html = r'''<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ريشة | Vector Drawing</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">ريشة</div>
+    <div class="top-actions">
+      <button id="newBtn" title="مشروع جديد">جديد</button>
+      <button id="undoBtn" title="تراجع">↶</button>
+      <button id="redoBtn" title="إعادة">↷</button>
+      <button id="saveBtn" title="حفظ المشروع">حفظ</button>
+      <button id="openBtn" title="فتح مشروع">فتح</button>
+      <button id="exportPngBtn" title="تصدير PNG">PNG</button>
+      <button id="exportSvgBtn" title="تصدير SVG">SVG</button>
+      <button id="menuBtn" class="icon-btn" title="استيراد">⋮</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="toolbar">
+      <button class="tool active" data-tool="pen" title="قلم">✎<span>قلم</span></button>
+      <button class="tool" data-tool="select" title="تحديد">⌖<span>تحديد</span></button>
+      <button class="tool" data-tool="pan" title="تحريك اللوحة">✋<span>تحريك</span></button>
+      <button class="tool" data-tool="eraser" title="ممحاة">⌫<span>ممحاة</span></button>
+    </aside>
+
+    <section class="canvas-area">
+      <div id="canvasViewport" class="canvas-viewport">
+        <div id="artboardWrap" class="artboard-wrap">
+          <canvas id="artboard" width="1200" height="800"></canvas>
+          <div id="selectionBox" class="selection-box hidden">
+            <div class="handle nw"></div><div class="handle ne"></div>
+            <div class="handle sw"></div><div class="handle se"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-panel">
+        <label>اللون <input id="colorInput" type="color" value="#111111"></label>
+        <label>السمك <input id="sizeInput" type="range" min="1" max="80" value="6"><output id="sizeValue">6</output></label>
+        <label>التكبير <input id="zoomInput" type="range" min="25" max="200" value="100"><output id="zoomValue">100%</output></label>
+        <span id="status">جاهز</span>
+      </div>
+    </section>
+
+    <aside class="layers-panel">
+      <div class="panel-title">الطبقات</div>
+      <div id="layersList" class="layers-list"></div>
+      <div class="layer-actions">
+        <button id="addLayerBtn">+ طبقة</button>
+        <button id="deleteLayerBtn">حذف</button>
+        <button id="duplicateLayerBtn">نسخ</button>
+      </div>
+    </aside>
+  </main>
+
+  <input id="projectInput" type="file" accept=".vpaint,.json,application/json" hidden>
+  <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+
+  <div id="importMenu" class="import-menu hidden">
+    <div class="menu-title">استيراد</div>
+    <button data-import="image">🖼 صورة</button>
+    <button data-import="project">📁 مشروع ريشة</button>
+    <button data-import="svg">◇ رسم SVG</button>
+    <button data-import="brush">🖌 فرشاة</button>
+    <button data-import="lines">〰 خطوط</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+'''
+
+style_css = r'''*{box-sizing:border-box}
+:root{
+  --bg:#17191d;--panel:#202329;--panel2:#292d34;--line:#393e47;
+  --text:#f2f3f5;--muted:#aeb4bd;--accent:#6ea8fe;
+}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text)}
+button,input{font:inherit}
+button{border:0;color:var(--text);background:var(--panel2);cursor:pointer}
+button:hover{background:#343943}
+.topbar{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{font-size:22px;font-weight:800;letter-spacing:.5px}
+.top-actions{display:flex;gap:6px;align-items:center}
+.top-actions button{height:36px;padding:0 12px;border-radius:8px}
+.top-actions .icon-btn{font-size:23px;width:40px;padding:0}
+.workspace{height:calc(100vh - 56px);display:grid;grid-template-columns:72px 1fr 220px;min-width:720px}
+.toolbar{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 6px;gap:8px}
+.tool{width:58px;height:62px;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:21px;gap:2px}
+.tool span{font-size:11px;color:var(--muted)}
+.tool.active{outline:2px solid var(--accent);background:#303741}
+.canvas-area{position:relative;min-width:0;background:#101216;display:flex;flex-direction:column}
+.canvas-viewport{position:relative;flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:50px}
+.artboard-wrap{position:relative;flex:none;box-shadow:0 8px 35px rgba(0,0,0,.4)}
+#artboard{display:block;background:white;touch-action:none}
+.selection-box{position:absolute;border:1.5px dashed #1683ff;pointer-events:none}
+.selection-box .handle{position:absolute;width:9px;height:9px;background:#fff;border:1px solid #1683ff}
+.handle.nw{left:-5px;top:-5px}.handle.ne{right:-5px;top:-5px}.handle.sw{left:-5px;bottom:-5px}.handle.se{right:-5px;bottom:-5px}
+.bottom-panel{min-height:48px;border-top:1px solid var(--line);background:var(--panel);display:flex;align-items:center;gap:18px;padding:7px 12px;font-size:13px}
+.bottom-panel label{display:flex;align-items:center;gap:7px;white-space:nowrap}
+#colorInput{width:34px;height:30px;padding:2px;border:0;background:transparent}
+#sizeInput{width:120px}#zoomInput{width:110px}
+output{min-width:34px;color:var(--muted)}
+#status{margin-right:auto;color:var(--muted)}
+.layers-panel{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.panel-title{padding:15px 14px;border-bottom:1px solid var(--line);font-weight:700}
+.layers-list{flex:1;overflow:auto;padding:8px}
+.layer-row{padding:10px;border-radius:8px;margin-bottom:5px;background:transparent;cursor:pointer;display:flex;align-items:center;gap:8px}
+.layer-row.active{background:#303741;outline:1px solid #4a5260}
+.layer-icon{width:25px;text-align:center;color:var(--muted)}
+.layer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.layer-actions{padding:9px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.layer-actions button{height:34px;border-radius:7px}
+.layer-actions button:first-child{grid-column:1/-1}
+.import-menu{position:fixed;top:51px;right:10px;width:190px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px;box-shadow:0 12px 30px rgba(0,0,0,.45);z-index:20}
+.import-menu button{width:100%;padding:10px;border-radius:7px;text-align:right}
+.menu-title{padding:8px 10px;color:var(--muted);font-size:12px}
+.hidden{display:none!important}
+@media(max-width:850px){
+  .workspace{grid-template-columns:64px 1fr 170px}
+  .top-actions button{padding:0 8px}
+  .bottom-panel{gap:9px}
+}
+'''
+
+app_js = r'''(() => {
+  "use strict";
+
+  const canvas = document.getElementById("artboard");
+  const ctx = canvas.getContext("2d");
+  const wrap = document.getElementById("artboardWrap");
+  const viewport = document.getElementById("canvasViewport");
+  const selectionBox = document.getElementById("selectionBox");
+  const layersList = document.getElementById("layersList");
+  const status = document.getElementById("status");
+  const importMenu = document.getElementById("importMenu");
+
+  const state = {
+    version: 1,
+    width: 1200,
+    height: 800,
+    zoom: 1,
+    tool: "pen",
+    color: "#111111",
+    size: 6,
+    layers: [],
+    activeLayer: 0,
+    drawing: false,
+    currentStroke: null,
+    pointerId: null,
+    pan: {x: 0, y: 0},
+    history: [],
+    historyIndex: -1,
+    selectedImage: null,
+    transform: null
+  };
+
+  function uid(prefix="id") {
+    return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,8);
+  }
+
+  function makeStrokeLayer(name="رسم") {
+    return {id:uid("layer"), type:"stroke", name, visible:true, strokes:[]};
+  }
+
+  function makeImageLayer(data, name="صورة") {
+    return {id:uid("layer"), type:"image", name, visible:true, image:data, x:100, y:100, w:400, h:300};
+  }
+
+  function setStatus(msg){ status.textContent = msg; }
+
+  function currentLayer(){ return state.layers[state.activeLayer] || null; }
+
+  function pushHistory() {
+    const snapshot = JSON.stringify({
+      width: state.width, height: state.height, layers: state.layers, activeLayer: state.activeLayer
+    });
+    state.history = state.history.slice(0, state.historyIndex + 1);
+    state.history.push(snapshot);
+    if (state.history.length > 50) state.history.shift();
+    state.historyIndex = state.history.length - 1;
+  }
+
+  function restoreSnapshot(snapshot) {
+    const s = JSON.parse(snapshot);
+    state.width = s.width; state.height = s.height;
+    state.layers = s.layers; state.activeLayer = Math.min(s.activeLayer, state.layers.length - 1);
+    canvas.width = state.width; canvas.height = state.height;
+    applyZoom();
+    renderLayers();
+    render();
+  }
+
+  function undo(){
+    if(state.historyIndex <= 0){setStatus("لا يوجد تراجع");return}
+    state.historyIndex--;
+    restoreSnapshot(state.history[state.historyIndex]);
+    setStatus("تم التراجع");
+  }
+
+  function redo(){
+    if(state.historyIndex >= state.history.length-1){setStatus("لا توجد إعادة");return}
+    state.historyIndex++;
+    restoreSnapshot(state.history[state.historyIndex]);
+    setStatus("تمت الإعادة");
+  }
+
+  function resetProject(){
+    state.layers = [makeStrokeLayer("رسم 1")];
+    state.activeLayer = 0;
+    state.selectedImage = null;
+    state.width = 1200; state.height = 800;
+    canvas.width = state.width; canvas.height = state.height;
+    state.history = []; state.historyIndex = -1;
+    pushHistory();
+    renderLayers(); render();
+    setStatus("مشروع جديد");
+  }
+
+  function renderLayers(){
+    layersList.innerHTML = "";
+    [...state.layers].reverse().forEach((layer, reverseIndex) => {
+      const realIndex = state.layers.length - 1 - reverseIndex;
+      const row = document.createElement("div");
+      row.className = "layer-row" + (realIndex === state.activeLayer ? " active" : "");
+      row.innerHTML = `<span class="layer-icon">${layer.type === "image" ? "🖼" : "✎"}</span><span class="layer-name"></span>`;
+      row.querySelector(".layer-name").textContent = layer.name;
+      row.onclick = () => {
+        state.activeLayer = realIndex;
+        state.selectedImage = layer.type === "image" ? layer.id : null;
+        renderLayers(); renderSelection();
+      };
+      layersList.appendChild(row);
+    });
+  }
+
+  function addLayer(){
+    state.layers.push(makeStrokeLayer(`رسم ${state.layers.length + 1}`));
+    state.activeLayer = state.layers.length - 1;
+    pushHistory(); renderLayers(); render(); setStatus("أضيفت طبقة");
+  }
+
+  function deleteLayer(){
+    if(state.layers.length === 1){setStatus("لا يمكن حذف آخر طبقة");return}
+    state.layers.splice(state.activeLayer,1);
+    state.activeLayer = Math.max(0,state.activeLayer-1);
+    state.selectedImage = null;
+    pushHistory(); renderLayers(); render(); setStatus("حُذفت الطبقة");
+  }
+
+  function duplicateLayer(){
+    const src = currentLayer(); if(!src) return;
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.id = uid("layer"); copy.name = src.name + " نسخة";
+    if(copy.type === "image"){ copy.x += 25; copy.y += 25; }
+    state.layers.splice(state.activeLayer+1,0,copy);
+    state.activeLayer++;
+    pushHistory(); renderLayers(); render(); setStatus("نُسخت الطبقة");
+  }
+
+  function applyZoom(){
+    wrap.style.width = (state.width * state.zoom) + "px";
+    wrap.style.height = (state.height * state.zoom) + "px";
+    canvas.style.width = (state.width * state.zoom) + "px";
+    canvas.style.height = (state.height * state.zoom) + "px";
+    renderSelection();
+  }
+
+  function screenToCanvas(e){
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (state.width / r.width),
+      y: (e.clientY - r.top) * (state.height / r.height)
+    };
+  }
+
+  function drawSmoothStroke(c, stroke){
+    if(!stroke.points.length) return;
+    c.save();
+    c.strokeStyle = stroke.color;
+    c.lineWidth = stroke.size;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.globalAlpha = stroke.opacity ?? 1;
+    c.beginPath();
+
+    const pts = stroke.points;
+    if(pts.length === 1){
+      c.arc(pts[0].x, pts[0].y, stroke.size/2, 0, Math.PI*2);
+      c.fillStyle = stroke.color;
+      c.fill();
+      c.restore();
+      return;
+    }
+
+    c.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length-1;i++){
+      const p = pts[i], n = pts[i+1];
+      const mx = (p.x+n.x)/2, my=(p.y+n.y)/2;
+      c.quadraticCurveTo(p.x,p.y,mx,my);
+    }
+    const last=pts[pts.length-1], prev=pts[pts.length-2];
+    c.quadraticCurveTo(prev.x,prev.y,last.x,last.y);
+    c.stroke();
+    c.restore();
+  }
+
+  function drawImageLayer(c, layer){
+    if(!layer.visible || !layer.image) return;
+    const img = new Image();
+    img.onload = () => {
+      // Render is async for images. A redraw is harmless and keeps the editor simple.
+      c.save();
+      c.globalAlpha = layer.opacity ?? 1;
+      c.drawImage(img, layer.x, layer.y, layer.w, layer.h);
+      c.restore();
+    };
+    img.src = layer.image;
+  }
+
+  function render(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    for(const layer of state.layers){
+      if(!layer.visible) continue;
+      if(layer.type === "stroke"){
+        for(const stroke of layer.strokes) drawSmoothStroke(ctx, stroke);
+      } else if(layer.type === "image"){
+        drawImageLayer(ctx, layer);
+      }
+    }
+    renderSelection();
+  }
+
+  function renderSelection(){
+    const layer = state.layers.find(l => l.id === state.selectedImage);
+    if(!layer || layer.type !== "image"){
+      selectionBox.classList.add("hidden"); return;
+    }
+    selectionBox.classList.remove("hidden");
+    selectionBox.style.left = (layer.x * state.zoom) + "px";
+    selectionBox.style.top = (layer.y * state.zoom) + "px";
+    selectionBox.style.width = (layer.w * state.zoom) + "px";
+    selectionBox.style.height = (layer.h * state.zoom) + "px";
+  }
+
+  function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+
+  function beginStroke(e){
+    const layer = currentLayer();
+    if(!layer || layer.type !== "stroke") return;
+    const p = screenToCanvas(e);
+    state.drawing = true; state.pointerId = e.pointerId;
+    canvas.setPointerCapture(e.pointerId);
+    state.currentStroke = {
+      id:uid("stroke"), color:state.color, size:state.size, opacity:1, points:[p]
+    };
+    layer.strokes.push(state.currentStroke);
+    render();
+  }
+
+  function moveStroke(e){
+    if(!state.drawing || e.pointerId !== state.pointerId) return;
+    const p = screenToCanvas(e);
+    const pts = state.currentStroke.points;
+    const last = pts[pts.length-1];
+
+    // Filter tiny jitter. Retracing/reversing direction is deliberately allowed.
+    // The stroke is rendered as a centerline with round joins/caps, avoiding the
+    // self-intersecting polygon-outline problem that produced triangular spikes.
+    if(distance(p,last) >= 1.2){
+      pts.push(p);
+      render();
+    }
+  }
+
+  function endStroke(e){
+    if(!state.drawing || e.pointerId !== state.pointerId) return;
+    state.drawing = false;
+    state.currentStroke = null;
+    state.pointerId = null;
+    try{canvas.releasePointerCapture(e.pointerId)}catch(_){}
+    pushHistory();
+    render();
+    setStatus("تم الرسم");
+  }
+
+  function eraseAt(e){
+    const layer=currentLayer();
+    if(!layer || layer.type!=="stroke") return;
+    const p=screenToCanvas(e);
+    const radius=state.size*1.5;
+    layer.strokes = layer.strokes.filter(s => !s.points.some(pt => distance(pt,p) <= radius));
+    render();
+  }
+
+  function pickImageAt(p){
+    for(let i=state.layers.length-1;i>=0;i--){
+      const l=state.layers[i];
+      if(l.type==="image" && l.visible && p.x>=l.x && p.x<=l.x+l.w && p.y>=l.y && p.y<=l.y+l.h) return l;
+    }
+    return null;
+  }
+
+  function moveSelectedImage(e){
+    const layer=state.layers.find(l=>l.id===state.selectedImage);
+    if(!layer) return;
+    const p=screenToCanvas(e);
+    if(!state.transform){
+      state.transform={start:p,x:layer.x,y:layer.y,w:layer.w,h:layer.h};
+    }
+    layer.x=state.transform.x+(p.x-state.transform.start.x);
+    layer.y=state.transform.y+(p.y-state.transform.start.y);
+    render(); renderSelection();
+  }
+
+  let draggingImage=false;
+  canvas.addEventListener("pointerdown", e=>{
+    if(state.tool==="pen"){ beginStroke(e); return; }
+    if(state.tool==="eraser"){ eraseAt(e); return; }
+    if(state.tool==="select"){
+      const p=screenToCanvas(e), hit=pickImageAt(p);
+      if(hit){
+        state.selectedImage=hit.id;
+        state.activeLayer=state.layers.indexOf(hit);
+        draggingImage=true;
+        state.transform={start:p,x:hit.x,y:hit.y,w:hit.w,h:hit.h};
+        renderLayers(); renderSelection();
+        canvas.setPointerCapture(e.pointerId);
+      } else {
+        state.selectedImage=null; renderSelection();
+      }
+    }
+  });
+
+  canvas.addEventListener("pointermove", e=>{
+    if(state.tool==="pen"){moveStroke(e);return}
+    if(state.tool==="eraser" && (e.buttons&1)){eraseAt(e);return}
+    if(state.tool==="select" && draggingImage){moveSelectedImage(e)}
+  });
+
+  canvas.addEventListener("pointerup", e=>{
+    if(state.tool==="pen") endStroke(e);
+    if(state.tool==="select" && draggingImage){
+      draggingImage=false; state.transform=null;
+      pushHistory(); setStatus("تم تحريك الصورة");
+      try{canvas.releasePointerCapture(e.pointerId)}catch(_){}
+    }
+  });
+
+  canvas.addEventListener("pointercancel", e=>{
+    if(state.tool==="pen") endStroke(e);
+    draggingImage=false; state.transform=null;
+  });
+
+  document.querySelectorAll(".tool").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      document.querySelectorAll(".tool").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      state.tool=btn.dataset.tool;
+      if(state.tool!=="select") state.selectedImage=null;
+      renderSelection();
+      setStatus(btn.title);
+    });
+  });
+
+  document.getElementById("colorInput").addEventListener("input",e=>state.color=e.target.value);
+  document.getElementById("sizeInput").addEventListener("input",e=>{
+    state.size=+e.target.value; document.getElementById("sizeValue").value=state.size;
+  });
+  document.getElementById("zoomInput").addEventListener("input",e=>{
+    state.zoom=+e.target.value/100;
+    document.getElementById("zoomValue").value=e.target.value+"%";
+    applyZoom();
+  });
+
+  document.getElementById("undoBtn").onclick=undo;
+  document.getElementById("redoBtn").onclick=redo;
+  document.getElementById("newBtn").onclick=()=>{if(confirm("بدء مشروع جديد؟")) resetProject()};
+  document.getElementById("addLayerBtn").onclick=addLayer;
+  document.getElementById("deleteLayerBtn").onclick=deleteLayer;
+  document.getElementById("duplicateLayerBtn").onclick=duplicateLayer;
+
+  document.getElementById("menuBtn").onclick=e=>{
+    e.stopPropagation(); importMenu.classList.toggle("hidden");
+  };
+  document.addEventListener("click",e=>{
+    if(!importMenu.contains(e.target) && e.target.id!=="menuBtn") importMenu.classList.add("hidden");
+  });
+
+  importMenu.addEventListener("click",e=>{
+    const btn=e.target.closest("button[data-import]"); if(!btn)return;
+    importMenu.classList.add("hidden");
+    if(btn.dataset.import==="image") document.getElementById("imageInput").click();
+    else if(btn.dataset.import==="project") document.getElementById("projectInput").click();
+    else setStatus("هذا النوع سيضاف في المرحلة التالية");
+  });
+
+  document.getElementById("imageInput").addEventListener("change",e=>{
+    const file=e.target.files[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxW=500, maxH=400, scale=Math.min(1,maxW/img.width,maxH/img.height);
+        const layer=makeImageLayer(reader.result,file.name);
+        layer.w=Math.max(1,img.width*scale);
+        layer.h=Math.max(1,img.height*scale);
+        layer.x=(state.width-layer.w)/2; layer.y=(state.height-layer.h)/2;
+        state.layers.push(layer);
+        state.activeLayer=state.layers.length-1;
+        state.selectedImage=layer.id;
+        pushHistory(); renderLayers(); render(); setStatus("تم إدراج الصورة");
+      };
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value="";
+  });
+
+  function downloadBlob(blob,name){
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download=name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }
+
+  document.getElementById("saveBtn").onclick=()=>{
+    const data={
+      format:"vpaint", version:state.version, width:state.width,height:state.height,
+      layers:state.layers, activeLayer:state.activeLayer
+    };
+    downloadBlob(new Blob([JSON.stringify(data)],{type:"application/json"}),"reesha-project.vpaint");
+    setStatus("تم حفظ المشروع");
+  };
+
+  document.getElementById("openBtn").onclick=()=>document.getElementById("projectInput").click();
+
+  document.getElementById("projectInput").addEventListener("change",e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      try{
+        const d=JSON.parse(reader.result);
+        if(d.format!=="vpaint" || !Array.isArray(d.layers)) throw new Error("ملف غير صالح");
+        state.width=d.width||1200;state.height=d.height||800;
+        state.layers=d.layers;state.activeLayer=Math.max(0,Math.min(d.activeLayer||0,state.layers.length-1));
+        state.selectedImage=null;
+        canvas.width=state.width;canvas.height=state.height;
+        state.history=[];state.historyIndex=-1;pushHistory();
+        renderLayers();render();setStatus("تم فتح المشروع");
+      }catch(err){alert("تعذر فتح المشروع: "+err.message)}
+    };
+    reader.readAsText(file);e.target.value="";
+  });
+
+  document.getElementById("exportPngBtn").onclick=()=>{
+    // Canvas already contains the current composition.
+    canvas.toBlob(blob=>downloadBlob(blob,"reesha.png"),"image/png");
+    setStatus("تم تصدير PNG");
+  };
+
+  function svgEscape(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+  function pointsToPath(points){
+    if(!points.length)return "";
+    if(points.length===1)return `M ${points[0].x} ${points[0].y}`;
+    let d=`M ${points[0].x} ${points[0].y}`;
+    for(let i=1;i<points.length-1;i++){
+      const p=points[i],n=points[i+1];
+      d+=` Q ${p.x} ${p.y} ${(p.x+n.x)/2} ${(p.y+n.y)/2}`;
+    }
+    const p=points[points.length-2],n=points[points.length-1];
+    d+=` Q ${p.x} ${p.y} ${n.x} ${n.y}`;
+    return d;
+  }
+
+  document.getElementById("exportSvgBtn").onclick=()=>{
+    const parts=[`<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">`,
+      `<rect width="100%" height="100%" fill="white"/>`];
+    for(const layer of state.layers){
+      if(!layer.visible)continue;
+      if(layer.type==="stroke"){
+        for(const s of layer.strokes){
+          if(!s.points.length)continue;
+          if(s.points.length===1){
+            parts.push(`<circle cx="${s.points[0].x}" cy="${s.points[0].y}" r="${s.size/2}" fill="${svgEscape(s.color)}"/>`);
+          }else{
+            parts.push(`<path d="${pointsToPath(s.points)}" fill="none" stroke="${svgEscape(s.color)}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`);
+          }
+        }
+      }else if(layer.type==="image" && layer.image){
+        parts.push(`<image href="${layer.image}" x="${layer.x}" y="${layer.y}" width="${layer.w}" height="${layer.h}" preserveAspectRatio="none"/>`);
+      }
+    }
+    parts.push("</svg>");
+    downloadBlob(new Blob([parts.join("")],{type:"image/svg+xml"}),"reesha.svg");
+    setStatus("تم تصدير SVG");
+  };
+
+  resetProject();
+})();
+'''
+
+(root/"index.html").write_text(index_html, encoding="utf-8")
+(root/"style.css").write_text(style_css, encoding="utf-8")
+(root/"app.js").write_text(app_js, encoding="utf-8")
+
+zip_path = Path("/mnt/data/reesha-new-site.zip")
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    for p in [root/"index.html", root/"style.css", root/"app.js"]:
+        z.write(p, arcname=p.name)
+
+print(f"تم إنشاء المشروع في: {root}")
+print(f"الملفات: {[p.name for p in root.iterdir()]}")
+print(f"ZIP: {zip_path}")
